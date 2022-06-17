@@ -5,7 +5,7 @@ import typing as T
 import logging
 from pathlib import Path
 from datetime import datetime
-
+import os
 import cultionet
 from cultionet.data.datasets import EdgeDataset
 from cultionet.utils.project_paths import setup_paths
@@ -13,6 +13,7 @@ from cultionet.utils.normalize import get_norm_values
 from cultionet.data.create import create_dataset
 from cultionet.utils import model_preprocessing
 from cultionet.data.utils import create_network_data, NetworkDataset
+from cultionet.utils.normalize import NormValues
 
 import torch
 import geopandas as gpd
@@ -52,7 +53,7 @@ def get_image_list(ppaths, region, config, image_path):
         if image_path is not None:
             vi_path = Path(image_path) / region / image_vi
         elif str(ppaths.image_path).endswith('time_series_vars'):
-            vi_path = ppaths.image_path/region/image_vi
+            vi_path = ppaths.image_path / region / image_vi
         else:
             vi_path = ppaths.image_path / region / 'brdf_ts' / 'ms' / image_vi
 
@@ -161,7 +162,11 @@ def predict_image(args):
                 slice(w_pad.col_off, w_pad.col_off+w_pad.width)
             )
             # Create the data for the chunk
-            data = create_network_data(time_series[slc].data.compute(num_workers=8), ntime)
+            input1 = time_series[slc].data.compute(num_workers=8)
+            # print(type(input1))
+            # print(input1.shape)
+            # print(ntime)
+            data = create_network_data(input1, ntime)
             # Create the temporary dataset
             net_ds = NetworkDataset(data, ppaths.predict_path, data_values)
 
@@ -213,7 +218,6 @@ def persist_dataset(args):
     config = open_config(args.config_file)
     project_path_lists = [args.project_path]
     ref_res_lists = [args.ref_res]
-
     inputs = model_preprocessing.TrainInputs(
         regions=config['regions'],
         years=config['years'],
@@ -228,12 +232,11 @@ def persist_dataset(args):
             ref_res_lists
     ):
         ppaths = setup_paths(project_path, append_ts=True if args.append_ts == 'y' else False)
-
-        # if save path is specified use that, otherwise use default
         if args.save_to_path is not None:
-            save_to_dir = Path(args.save_to_path)
+            save_to_dir = args.save_to_path
         else:
             save_to_dir = ppaths.process_path
+        # print(inputs.regions_lists)
         try:
             tmp = int(region)
             region = f'{tmp:06d}'
@@ -252,6 +255,7 @@ def persist_dataset(args):
         df_edges = gpd.read_file(edges)
 
         image_list = []
+        # print(model_preprocessing.VegetationIndices(image_vis=config['image_vis']).n_vis)
         for image_vi in model_preprocessing.VegetationIndices(image_vis=config['image_vis']).image_vis:
             # Set the full path to the images
             if str(ppaths.image_path).endswith('time_series_vars'):
@@ -316,7 +320,13 @@ def train_model(args):
     ppaths = setup_paths(args.project_path)
 
     # Check dimensions
-    ds = EdgeDataset(ppaths.train_path)
+    if args.train_path is None:
+        train_path = ppaths.train_path
+    else:
+        train_path = args.train_path
+
+    ds = EdgeDataset(train_path)
+
     ds.check_dims()
     # Get the normalization means and std. deviations on the train data
     cultionet.model.seed_everything(args.random_seed)
@@ -324,16 +334,27 @@ def train_model(args):
     # Calculate the values needed to transform to z-scores, using
     # the training data
     data_values = get_norm_values(dataset=train_ds, batch_size=args.batch_size*4)
+    if ppaths.norm_file.exists() and args.epochs>1:
+        epochs = args.epochs
+        old_data_values = torch.load(str(ppaths.norm_file))
+        old_means = old_data_values.mean
+        old_stds = old_data_values.std
+        new_means = data_values.mean
+        new_stds = data_values.std
+        means = (old_means*epochs+new_means)/(epochs+1)
+        stds = ((epochs*old_stds**2 +new_stds**2)/(epochs+1))**.5
+        data_values = NormValues(mean=means,
+                                 std=stds,
+                                 max=data_values.max)
     torch.save(data_values, str(ppaths.norm_file))
 
     # Create the train data object again, this time passing
     # the means and standard deviation tensors
     ds = EdgeDataset(
-        ppaths.train_path,
+        train_path,
         data_means=data_values.mean,
         data_stds=data_values.std
     )
-
     # Fit the model
     cultionet.fit(
         dataset=ds,
@@ -343,13 +364,15 @@ def train_model(args):
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         filters=args.filters,
+        accumulate_grad_batches=args.accumulate_grad_batches,
         random_seed=args.random_seed,
         reset_model=args.reset_model,
         auto_lr_find=args.auto_lr_find,
         device=args.device,
         gradient_clip_val=args.gradient_clip_val,
         early_stopping_patience=args.patience,
-        stochastic_weight_avg=args.stochastic_weight_avg
+        stochastic_weight_avg=args.stochastic_weight_avg,
+        weight_decay=args.weight_decay
     )
 
 
@@ -405,11 +428,6 @@ def main():
                 help='The grid size (*If not given, grid size is taken from the the grid vector. If given, grid size '
                      'is taken from the upper left coordinate of the grid vector.) (default: %(default)s)',
                 default=None, nargs='+', type=int
-            )
-            subparser.add_argument(
-                '--save-directory', dest='save_to_path',
-                help='Provides and alternate directory to save the training data. (default: None)',
-                default=None
             )
         elif process == 'train':
             subparser.add_argument(
@@ -469,12 +487,6 @@ def main():
             )
             subparser.add_argument(
                 '--offset', dest='offset', help='The image offset (default: %(default)s)', default=0.0, type=float
-            )
-            subparser.add_argument(
-                '--image_directory_path', dest='image_path',
-                    help='The path to a directory with time series data. Only required ' 
-                         'if the data is outside of the default directory. (default: None)',
-                    default=None
             )
         if process in ['create', 'predict']:
             subparser.add_argument(

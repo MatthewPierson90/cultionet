@@ -26,7 +26,7 @@ def augment_time(
     xseg = xaug[:, min_row:max_row, min_col:max_col].copy()
     seg = ldata.segments[min_row:max_row, min_col:max_col].copy()
     mask = np.uint8(seg == p.label)[np.newaxis]
-    
+
     ntime, nrows, ncols = xseg.shape
     # Reshape from (T x H x W) -> (H*W x T X C)
     xseg = (xseg.transpose(1, 2, 0)
@@ -132,8 +132,21 @@ def augment(
         bdist_aug = cv2.rotate(np.float32(bdist), deg_dict[deg])
 
     elif 'roll' in aug:
-        shift = np.random.choice(range(1, int(xaug.shape[0]*0.75)+1), size=1)[0]
-        xaug = np.roll(xaug, shift=shift, axis=0)
+        ntime = int(xaug.shape[0]/nbands)
+        if 'p' in aug:
+            shift_percent = int(aug.replace('rollp', ''))/100
+            shift = int(ntime*shift_percent)
+        elif 's' in aug:
+            shift = int(aug.replace('rolls', ''))
+        else:
+            shift = int(aug.replace('roll', ''))
+        xaug_copy = np.zeros((int(xaug.shape[0]/nbands), nbands, xaug.shape[1], xaug.shape[2]))
+        for n in range(nbands):
+            xaug_copy[:, n] = xaug[ntime*n: ntime*(n+1)]
+        xaug_copy = np.roll(xaug_copy, shift=shift, axis=0)
+        for n in range(nbands):
+            xaug[ntime*n: ntime*(n+1)] = xaug_copy[:, n]
+        # shift = np.random.choice(range(1, int(xaug.shape[0]*0.75)+1), size=1)[0]
         yaug = y.copy()
         bdist_aug = bdist.copy()
 

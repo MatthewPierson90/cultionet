@@ -331,8 +331,11 @@ def create_image_vars(
                            .clip(0, 1))
 
             # Get the band count per index
-            nbands = int(src_ts.gw.nbands / len(list(set([Path(fn).parent.name for fn in image]))))
-
+            # print(Path(image[0]))
+            ntime = int(src_ts.gw.nbands / len(list(set([Path(fn).parent.name for fn in image]))))
+            nbands = int(src_ts.gw.nbands/ntime)
+            # print('in create', nbands)
+            # print(grid_edges)
             if grid_edges is not None:
                 # Get the training edges
                 labels_array = polygon_to_array(

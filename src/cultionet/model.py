@@ -25,6 +25,7 @@ def fit(
     val_frac: T.Optional[float] = 0.2,
     batch_size: T.Optional[int] = 4,
     filters: T.Optional[int] = 32,
+    accumulate_grad_batches: T.Optional[int] = 1,
     learning_rate: T.Optional[float] = 0.001,
     epochs: T.Optional[int] = 30,
     save_top_k: T.Optional[int] = 1,
@@ -32,6 +33,7 @@ def fit(
     early_stopping_min_delta: T.Optional[float] = 0.01,
     gradient_clip_val: T.Optional[float] = 1.0,
     random_seed: T.Optional[int] = 0,
+    weight_decay: T.Optional[float] = 1e-5,
     reset_model: T.Optional[bool] = False,
     auto_lr_find: T.Optional[bool] = False,
     device: T.Optional[str] = 'gpu',
@@ -78,7 +80,8 @@ def fit(
         num_features=train_ds.num_features,
         num_time_features=train_ds.num_time_features,
         filters=filters,
-        learning_rate=learning_rate
+        learning_rate=learning_rate,
+        weight_decay=weight_decay
     )
 
     if reset_model:
@@ -99,7 +102,7 @@ def fit(
         mode='min',
         monitor='loss',
         every_n_train_steps=0,
-        every_n_val_epochs=1
+        every_n_epochs=1
     )
 
     cb_val_loss = ModelCheckpoint(monitor='val_loss')
@@ -126,7 +129,7 @@ def fit(
         enable_checkpointing=True,
         auto_lr_find=auto_lr_find,
         auto_scale_batch_size=False,
-        accumulate_grad_batches=1,
+        accumulate_grad_batches=accumulate_grad_batches,
         gradient_clip_val=gradient_clip_val,
         gradient_clip_algorithm='value',
         check_val_every_n_epoch=1,
@@ -148,7 +151,7 @@ def fit(
 
 
 def predict(
-    dataset: EdgeDataset,
+    predict_ds: EdgeDataset,
     ckpt_file: T.Union[str, Path],
     filters: T.Optional[int] = 32,
     device: T.Union[str, bytes] = 'gpu',
@@ -168,10 +171,11 @@ def predict(
         lit_model (Optional[CultioLitModel]): A model to predict with. If not given, the model is loaded
             from the checkpoint file.
     """
+
     ckpt_file = Path(ckpt_file)
 
     data_module = EdgeDataModule(
-        predict_ds=dataset, batch_size=1, num_workers=0
+        predict_ds=predict_ds, batch_size=1, num_workers=0
     )
 
     trainer_kwargs = dict(
@@ -187,8 +191,8 @@ def predict(
     )
 
     lit_kwargs = dict(
-        num_features=dataset.num_features,
-        num_time_features=dataset.num_time_features,
+        num_features=predict_ds.num_features,
+        num_time_features=predict_ds.num_time_features,
         filters=filters
     )
 
